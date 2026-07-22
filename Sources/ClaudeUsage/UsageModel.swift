@@ -72,6 +72,18 @@ enum UsageDecoder {
         return plain.date(from: string)
     }
 
+    // Compact single-unit countdown for the menu bar, e.g. "4h", "6d", "20m".
+    // Rounds down, so the real reset is always at least this far away.
+    static func countdownShort(to date: Date, now: Date = Date()) -> String {
+        let seconds = Int(date.timeIntervalSince(now))
+        if seconds < 60 { return "<1m" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)h" }
+        return "\(hours / 24)d"
+    }
+
     static func countdown(to date: Date, now: Date = Date()) -> String {
         let seconds = Int(date.timeIntervalSince(now))
         if seconds < 60 { return "soon" }

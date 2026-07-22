@@ -62,17 +62,19 @@ final class StatusItemController {
         let dimmed = state.isStale || state.phase != .ok
         let ordered = [snapshot.session, snapshot.weekly].compactMap { $0 }
         let shown = ordered.isEmpty ? [snapshot.mostConstrained].compactMap { $0 } : ordered
-        let shortLabels = ["five_hour": "5h", "seven_day": "wk"]
 
+        // Each limit shows "<% left> <reset>", e.g. "77% 4h". The reset unit
+        // (hours vs days) tells session from weekly, so no S/W tag is needed.
+        // Reading "plenty left + reset near" tells you it's safe to burn more.
         var segments: [(String, NSColor)] = []
         var a11yParts: [String] = []
         for (index, bucket) in shown.enumerated() {
-            let prefix = index == 0 ? " " : "  ·  "
-            let tag = shortLabels[bucket.id]
-            // Full-contrast label color (not dim gray) so the tags stay readable.
-            segments.append((prefix + (tag.map { "\($0) " } ?? ""), .labelColor))
+            segments.append((index == 0 ? " " : "  ·  ", .labelColor))
             let color = dimmed ? .secondaryLabelColor : UsageColor.forRemaining(bucket.remainingPercent)
             segments.append(("\(bucket.remainingPercent)%", color))
+            if let resetsAt = bucket.resetsAt {
+                segments.append((" " + UsageDecoder.countdownShort(to: resetsAt), .labelColor))
+            }
 
             var part = "\(bucket.label): \(bucket.remainingPercent) percent remaining"
             if let resetsAt = bucket.resetsAt { part += ", resets in \(UsageDecoder.countdown(to: resetsAt))" }
