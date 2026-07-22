@@ -1,0 +1,96 @@
+import Foundation
+
+struct Credentials {
+    let accessToken: String
+    let refreshToken: String?
+    let expiresAt: Date?
+    let subscriptionType: String?
+
+    func isNearExpiry(now: Date = Date()) -> Bool {
+        guard let expiresAt else { return false }
+        return expiresAt.timeIntervalSince(now) < 300
+    }
+}
+
+enum CredentialStore {
+    // Uses /usr/bin/security (stable Apple code signature) instead of linking
+    // Security.framework: the keychain ACL prompt is attributed to the calling
+    // binary's signature, and ours changes on every ad-hoc rebuild. With the
+    // CLI, one "Always Allow" survives rebuilds.
+    static func discover() -> Credentials? {
+        let keychainQueries: [[String]] = [
+            ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            ["find-generic-password", "-s", "Claude Code", "-w"],
+        ]
+        for args in keychainQueries {
+            if let blob = runSecurity(args), let creds = parse(blob) { return creds }
+        }
+        let fileURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/.credentials.json")
+        if let data = try? Data(contentsOf: fileURL),
+           let blob = String(data: data, encoding: .utf8),
+           let creds = parse(blob) {
+            return creds
+        }
+        return nil
+    }
+
+    private static func runSecurity(_ args: [String]) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = args
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let output = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (output?.isEmpty ?? true) ? nil : output
+    }
+
+    private static func parse(_ blob: String) -> Credentials? {
+        guard let data = blob.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        let oauth = (root["claudeAiOauth"] as? [String: Any]) ?? root
+        guard let accessToken = oauth["accessToken"] as? String, !accessToken.isEmpty else {
+            return nil
+        }
+        var expiresAt: Date?
+        if let raw = (oauth["expiresAt"] as? NSNumber)?.doubleValue {
+            // Stored as epoch milliseconds; guard against a seconds-based value.
+            expiresAt = Date(timeIntervalSince1970: raw < 1e12 ? raw : raw / 1000)
+        }
+        return Credentials(
+            accessToken: accessToken,
+            refreshToken: oauth["refreshToken"] as? String,
+            expiresAt: expiresAt,
+            subscriptionType: oauth["subscriptionType"] as? String
+        )
+    }
+
+    // Path to the CLI bundled with the Claude desktop app (highest version wins),
+    // used only for the "not signed in" setup instructions.
+    static func bundledCLIPath() -> String? {
+        let base = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Claude/claude-code-vm")
+        guard let versions = try? FileManager.default.contentsOfDirectory(atPath: base.path) else {
+            return nil
+        }
+        let best = versions
+            .filter { !$0.hasPrefix(".") }
+            .sorted { $0.compare($1, options: .numeric) == .orderedAscending }
+            .last
+        guard let best else { return nil }
+        let path = base.appendingPathComponent("\(best)/claude").path
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+    }
+}
