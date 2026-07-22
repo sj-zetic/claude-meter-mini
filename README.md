@@ -48,8 +48,13 @@ doesn't re-prompt.
 
 ## Design notes
 
+- **Cost:** the `/api/oauth/usage` endpoint is a status read, not an inference
+  call — polling it consumes **0 tokens** and never counts against the 5-hour or
+  weekly limits. Only the endpoint's own request rate is bounded (handled by the
+  90 s spacing + backoff).
 - **Accuracy:** server-side utilization, refreshed every 90 s, on menu-open
-  (throttled 10 s), and via *Refresh Now* (⌘R). Exponential backoff to 15 min on
+  (throttled 10 s), and via *Refresh Now* (⌘R). A local per-minute tick re-renders
+  the reset countdown between polls (no network) so it counts down live. Exponential backoff to 15 min on
   429/errors, honoring `Retry-After`. Last result is cached to
   `~/Library/Application Support/ClaudeUsage/last.json` so a relaunch shows data
   instantly (marked stale until the first live fetch).

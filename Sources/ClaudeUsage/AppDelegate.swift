@@ -4,6 +4,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusController: StatusItemController!
     private var fetcher: UsageFetcher!
     private var menuBuilder: MenuBuilder!
+    private var tickTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -22,6 +23,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             fetcher.start()
         }
+
+        // Local per-minute tick: re-render the status item so the reset
+        // countdown ticks down between the 90s network polls. No fetch, 0 tokens.
+        // Only the title is refreshed (not the menu), so an open menu is undisturbed.
+        let tick = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            guard let self, Self.forcedState() == nil else { return }
+            self.statusController.update(with: self.fetcher.state)
+        }
+        tick.tolerance = 10
+        tickTimer = tick
 
         if ProcessInfo.processInfo.environment["CLAUDEUSAGE_OPEN_MENU"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
