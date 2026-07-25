@@ -23,13 +23,14 @@ final class UsageFetcher {
     var onUpdate: ((AppState) -> Void)?
 
     private var credentials: Credentials?
-    // Access token from our own refresh, kept in memory only — never written
-    // back to the keychain, so we can't clobber Claude Code's stored state.
-    private var refreshedAccessToken: String?
     private var currentInterval: TimeInterval = UsageFetcher.baseInterval
     private var timer: Timer?
     private var lastFetchAt: Date?
     private var inFlight = false
+    // Refresh attempts are strictly throttled: a failing refresh must never be
+    // retried every poll cycle (that once rate-limited us into a dead spiral).
+    private var refreshCooldownUntil: Date?
+    private var refreshInFlight = false
     private let session = URLSession(configuration: .ephemeral)
     private let userAgent: String
 
@@ -66,16 +67,56 @@ final class UsageFetcher {
         timer = t
     }
 
-    private func activeToken() -> String? {
+    // Keep the token perpetually fresh: re-read the store (Claude Code may have
+    // refreshed it), and if it is near expiry, proactively refresh BEFORE it
+    // dies — instead of reacting to 401s after the fact.
+    private func ensureFreshToken(_ completion: @escaping (String?) -> Void) {
         if credentials == nil || credentials!.isNearExpiry() {
             credentials = CredentialStore.discover()
-            refreshedAccessToken = nil
         }
-        return refreshedAccessToken ?? credentials?.accessToken
+        guard let creds = credentials else {
+            completion(nil)
+            return
+        }
+        guard creds.isNearExpiry(), let refreshToken = creds.refreshToken,
+              canAttemptRefresh() else {
+            // Fresh enough, or refresh unavailable/cooling down — use what we have.
+            completion(creds.accessToken)
+            return
+        }
+        refreshInFlight = true
+        refreshAccessToken(refreshToken: refreshToken) { [weak self] result in
+            guard let self else { return }
+            self.refreshInFlight = false
+            if let result {
+                self.refreshCooldownUntil = nil
+                let updated = CredentialStore.applyingRefresh(to: creds, result: result)
+                self.credentials = updated
+                // Persist the rotated pair — a rotation invalidates the OLD
+                // refresh token, so NOT writing back is what kills the app later.
+                CredentialStore.persist(updated)
+                completion(updated.accessToken)
+            } else {
+                // Cooldown set inside refreshAccessToken (honors Retry-After).
+                completion(creds.accessToken)
+            }
+        }
+    }
+
+    private func canAttemptRefresh() -> Bool {
+        if refreshInFlight { return false }
+        if let until = refreshCooldownUntil, Date() < until { return false }
+        return true
     }
 
     private func fetch(isRetryAfterAuthRecovery: Bool = false) {
-        guard let token = activeToken() else {
+        ensureFreshToken { [weak self] token in
+            self?.fetchUsage(token: token, isRetryAfterAuthRecovery: isRetryAfterAuthRecovery)
+        }
+    }
+
+    private func fetchUsage(token: String?, isRetryAfterAuthRecovery: Bool) {
+        guard let token else {
             state.phase = .notSignedIn
             notifyAndSchedule(after: currentInterval)
             return
@@ -148,26 +189,31 @@ final class UsageFetcher {
         }
     }
 
-    // Primary recovery: re-read the credential store (Claude Code refreshes
-    // tokens itself and rewrites the keychain). Fallback: refresh the token
-    // ourselves with the stored refresh token.
+    // Primary recovery after a 401: re-read the credential store (Claude Code
+    // refreshes tokens itself and rewrites the keychain). Fallback: refresh the
+    // token ourselves — throttled, so a broken refresh can't spiral.
     private func recoverAuthThenRetry() {
-        refreshedAccessToken = nil
         let previousToken = credentials?.accessToken
         credentials = CredentialStore.discover()
         if let creds = credentials, creds.accessToken != previousToken {
             fetch(isRetryAfterAuthRecovery: true)
             return
         }
-        guard let refreshToken = credentials?.refreshToken else {
+        guard let creds = credentials, let refreshToken = creds.refreshToken,
+              canAttemptRefresh() else {
             state.phase = .authError
             backOffAndNotify()
             return
         }
-        refreshAccessToken(refreshToken: refreshToken) { [weak self] newToken in
+        refreshInFlight = true
+        refreshAccessToken(refreshToken: refreshToken) { [weak self] result in
             guard let self else { return }
-            if let newToken {
-                self.refreshedAccessToken = newToken
+            self.refreshInFlight = false
+            if let result {
+                self.refreshCooldownUntil = nil
+                let updated = CredentialStore.applyingRefresh(to: creds, result: result)
+                self.credentials = updated
+                CredentialStore.persist(updated)
                 self.fetch(isRetryAfterAuthRecovery: true)
             } else {
                 self.state.phase = .authError
@@ -176,25 +222,42 @@ final class UsageFetcher {
         }
     }
 
-    private func refreshAccessToken(refreshToken: String, completion: @escaping (String?) -> Void) {
+    struct RefreshResult {
+        let accessToken: String
+        let refreshToken: String?
+        let expiresIn: TimeInterval?
+    }
+
+    private func refreshAccessToken(refreshToken: String,
+                                    completion: @escaping (RefreshResult?) -> Void) {
         var request = URLRequest(url: URL(string: "https://platform.claude.com/v1/oauth/token")!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
             "grant_type": "refresh_token",
             "refresh_token": refreshToken,
             "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
         ])
-        session.dataTask(with: request) { data, response, _ in
+        session.dataTask(with: request) { [weak self] data, response, _ in
             DispatchQueue.main.async {
-                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-                      let data,
+                guard let self else { return }
+                let http = response as? HTTPURLResponse
+                guard let http, http.statusCode == 200, let data,
                       let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                       let token = json["access_token"] as? String else {
+                    // Failure cooldown: at least 30 min, or the server's
+                    // Retry-After if longer. Never hammer the token endpoint.
+                    let retryAfter = http?.value(forHTTPHeaderField: "Retry-After")
+                        .flatMap(Double.init) ?? 0
+                    self.refreshCooldownUntil = Date().addingTimeInterval(max(1800, retryAfter))
                     completion(nil)
                     return
                 }
-                completion(token)
+                completion(RefreshResult(
+                    accessToken: token,
+                    refreshToken: json["refresh_token"] as? String,
+                    expiresIn: (json["expires_in"] as? NSNumber)?.doubleValue))
             }
         }.resume()
     }
