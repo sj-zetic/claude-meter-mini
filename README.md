@@ -84,7 +84,24 @@ CLAUDEUSAGE_FORCE_STATE=ok|notsignedin|stale|error|rate .build/release/ClaudeUsa
 # CLAUDEUSAGE_OPEN_MENU=1 auto-opens the dropdown on launch (for screenshots).
 ```
 
-## Launch at login
+## Always-on
 
-Toggle **Launch at Login** in the menu. It uses `SMAppService`, falling back to a
-LaunchAgent at `~/Library/LaunchAgents/com.seongjun.claudeusage.plist`.
+`install.sh` sets up a LaunchAgent (`~/Library/LaunchAgents/com.seongjun.claudeusage.plist`)
+so the widget **starts at login and auto-restarts if it crashes** — but a deliberate
+Quit is honored (`KeepAlive → SuccessfulExit:false`, i.e. restart only on abnormal
+exit). To stop it permanently:
+
+```bash
+launchctl bootout gui/$(id -u)/com.seongjun.claudeusage
+rm ~/Library/LaunchAgents/com.seongjun.claudeusage.plist
+```
+
+The menu's **Launch at Login** toggle (via `SMAppService`) manages the same thing.
+
+### Staying signed in
+
+The access token lasts ~24h; the widget auto-refreshes it (throttled to avoid the
+token endpoint's rate limit) and writes the rotated token back to the Keychain. If
+the endpoint ever rate-limits a refresh, the widget shows dimmed last-known data and
+**recovers on its own** once the limit clears — no relaunch needed. Only if the
+refresh token itself lapses do you re-run `claude auth login --claudeai`.
