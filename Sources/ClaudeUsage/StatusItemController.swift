@@ -91,8 +91,9 @@ final class StatusItemController {
     private func render(titleSegments: [(String, NSColor)], dimmed: Bool, accessibilityLabel: String) {
         guard let button = statusItem.button else { return }
         button.image = Self.crabImage
-        // Dimmed states desaturate the crab too, so the whole item reads as inactive.
-        button.contentTintColor = dimmed ? .secondaryLabelColor : nil
+        // The crab is always white — only the percentages carry color. Dim state
+        // is signaled by the text color, not the icon.
+        button.contentTintColor = nil
 
         let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         let title = NSMutableAttributedString()
@@ -103,9 +104,9 @@ final class StatusItemController {
         button.setAccessibilityLabel(accessibilityLabel)
     }
 
-    // The user's pixel-art crab, drawn as a template image so it recolors for
-    // light/dark automatically and stays crisp. Grid is 1 = filled, space = hole
-    // (the eyes read as cut-outs).
+    // The user's pixel-art crab, drawn in solid white and NON-template, so it
+    // stays white in every state and every appearance — the percentages are the
+    // only colored element. Grid is # = filled, space = hole (eyes are cut-outs).
     static let crabImage: NSImage = {
         let rows = [
             "  ########  ",
@@ -123,7 +124,7 @@ final class StatusItemController {
         let size = NSSize(width: CGFloat(cols) * cell, height: CGFloat(rows.count) * cell)
         let image = NSImage(size: size)
         image.lockFocus()
-        NSColor.black.setFill()
+        NSColor.white.setFill()
         for (r, row) in rows.enumerated() {
             for (c, ch) in row.enumerated() where ch == "#" {
                 NSRect(x: CGFloat(c) * cell,
@@ -135,7 +136,7 @@ final class StatusItemController {
         // Scale to menu-bar height while keeping the pixel proportions.
         let displayHeight: CGFloat = 15
         image.size = NSSize(width: displayHeight * size.width / size.height, height: displayHeight)
-        image.isTemplate = true
+        image.isTemplate = false   // keep the drawn white; don't let the system recolor it
         return image
     }()
 }

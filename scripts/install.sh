@@ -5,14 +5,19 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+LABEL="com.seongjun.claudeusage"
+
+# Stop any LaunchAgent-managed instance FIRST, otherwise crash-restart would
+# respawn the app mid-rebuild.
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+pkill -x ClaudeUsage >/dev/null 2>&1 || true
+sleep 0.5
+
 echo "==> swift build -c release"
 swift build -c release
 
 APP="$HOME/Applications/ClaudeUsage.app"
 echo "==> assembling $APP"
-osascript -e 'tell application "ClaudeUsage" to quit' >/dev/null 2>&1 || true
-pkill -x ClaudeUsage >/dev/null 2>&1 || true
-sleep 0.5
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
@@ -25,7 +30,6 @@ codesign --force --sign - "$APP"
 # Always-on: a LaunchAgent starts it at login and restarts it if it crashes
 # (but honors an intentional Quit — restart only on non-zero exit).
 echo "==> installing LaunchAgent (start at login + crash-restart)"
-LABEL="com.seongjun.claudeusage"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 BIN="$APP/Contents/MacOS/ClaudeUsage"
 mkdir -p "$HOME/Library/LaunchAgents"
