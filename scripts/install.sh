@@ -3,9 +3,11 @@
 # ~/Applications, and launch it.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO"
 
 LABEL="com.seongjun.claudeusage"
+RELOGIN_LABEL="com.seongjun.claudeusage.relogin"
 
 # Stop any LaunchAgent-managed instance FIRST, otherwise crash-restart would
 # respawn the app mid-rebuild.
@@ -49,4 +51,31 @@ cat > "$PLIST" <<PLISTEOF
 PLISTEOF
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
-echo "Done. Look for the crab icon in the menu bar (starts automatically at login)."
+
+# Keep-signed-in: a second LaunchAgent re-logs-in every 12h (and at login) via
+# the desktop session, so the token endpoint's rate-limited refresh is never
+# used. Requires being signed into the Claude desktop app.
+echo "==> installing relogin LaunchAgent (keeps the token fresh every 12h)"
+RELOGIN_PLIST="$HOME/Library/LaunchAgents/$RELOGIN_LABEL.plist"
+mkdir -p "$HOME/Library/Logs"
+cat > "$RELOGIN_PLIST" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>$RELOGIN_LABEL</string>
+	<key>ProgramArguments</key><array><string>/bin/bash</string><string>$REPO/scripts/relogin.sh</string></array>
+	<key>RunAtLoad</key><true/>
+	<key>StartInterval</key><integer>43200</integer>
+	<key>LimitLoadToSessionType</key><string>Aqua</string>
+	<key>StandardOutPath</key><string>$HOME/Library/Logs/claudeusage-relogin.out.log</string>
+	<key>StandardErrorPath</key><string>$HOME/Library/Logs/claudeusage-relogin.err.log</string>
+</dict>
+</plist>
+PLISTEOF
+chmod +x "$REPO/scripts/relogin.sh"
+launchctl bootout "gui/$(id -u)/$RELOGIN_LABEL" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$RELOGIN_PLIST"
+
+echo "Done. Crab icon starts at login; the token auto-refreshes via re-login every 12h."
+echo "(On another machine, edit EMAIL in scripts/relogin.sh and sign into the Claude desktop app.)"

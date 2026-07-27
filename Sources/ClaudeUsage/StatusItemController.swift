@@ -1,22 +1,19 @@
 import AppKit
 
 enum UsageColor {
-    // The user reads green fine; red is the hard one for them. So we keep the
-    // familiar green (good) → amber (caution) → red (critical) ramp, and make it
-    // colorblind-safe through REDUNDANCY, not hue choice: the number is always
-    // shown, and every state carries a distinct SHAPE (see iconName). Critical
-    // uses a warning triangle so it never depends on perceiving red.
+    // Two-level and colorblind-simple: GREEN when a limit is healthy (plenty
+    // left), otherwise the neutral label color — white on the dark menu bar.
+    // No red/amber (hard for the user to read) and NEVER gray, even when stale.
+    // "Good" = at least this much of the limit remaining.
+    static let goodThreshold = 40
+
     static func forRemaining(_ percent: Int) -> NSColor {
-        if percent >= 40 { return .systemGreen }
-        if percent >= 15 { return .systemOrange }
-        return .systemRed
+        percent >= goodThreshold ? .systemGreen : .labelColor
     }
 
-    // Shape-based redundancy: distinguishable without relying on hue.
+    // Two matching shapes for redundancy in the dropdown rows.
     static func iconName(forRemaining percent: Int) -> String {
-        if percent >= 40 { return "checkmark.circle.fill" }
-        if percent >= 15 { return "exclamationmark.circle.fill" }
-        return "exclamationmark.triangle.fill"
+        percent >= goodThreshold ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
     }
 }
 
@@ -30,7 +27,7 @@ final class StatusItemController {
             button.image = Self.crabImage
             button.imagePosition = .imageLeading
         }
-        render(titleSegments: [(" …", .secondaryLabelColor)], dimmed: true,
+        render(titleSegments: [(" …", .labelColor)],
                accessibilityLabel: "Claude usage: loading")
     }
 
@@ -39,11 +36,11 @@ final class StatusItemController {
 
         switch state.phase {
         case .notSignedIn where snapshot == nil:
-            render(titleSegments: [(" –", .secondaryLabelColor)], dimmed: true,
+            render(titleSegments: [(" –", .labelColor)],
                    accessibilityLabel: "Claude usage: not signed in")
             return
         case .authError where snapshot == nil:
-            render(titleSegments: [(" –", .secondaryLabelColor)], dimmed: true,
+            render(titleSegments: [(" –", .labelColor)],
                    accessibilityLabel: "Claude usage: sign-in expired")
             return
         default:
@@ -51,27 +48,23 @@ final class StatusItemController {
         }
 
         guard let snapshot else {
-            render(titleSegments: [(" –", .secondaryLabelColor)], dimmed: true,
+            render(titleSegments: [(" –", .labelColor)],
                    accessibilityLabel: "Claude usage: no data yet")
             return
         }
 
-        // Show BOTH frequent blockers — session (5-hour) and weekly — each number
-        // colored by its own severity. Falls back to most-constrained if a bucket
-        // is missing. Stale/error dims everything (shape/number still readable).
-        let dimmed = state.isStale || state.phase != .ok
+        // Show BOTH frequent blockers — session (5-hour) and weekly. Each number
+        // is GREEN when healthy, otherwise WHITE — never gray, even when stale.
+        // The reset unit (hours vs days) tells session from weekly.
+        let stale = state.isStale || state.phase != .ok
         let ordered = [snapshot.session, snapshot.weekly].compactMap { $0 }
         let shown = ordered.isEmpty ? [snapshot.mostConstrained].compactMap { $0 } : ordered
 
-        // Each limit shows "<% left> <reset>", e.g. "77% 4h". The reset unit
-        // (hours vs days) tells session from weekly, so no S/W tag is needed.
-        // Reading "plenty left + reset near" tells you it's safe to burn more.
         var segments: [(String, NSColor)] = []
         var a11yParts: [String] = []
         for (index, bucket) in shown.enumerated() {
             segments.append((index == 0 ? " " : "  ·  ", .labelColor))
-            let color = dimmed ? .secondaryLabelColor : UsageColor.forRemaining(bucket.remainingPercent)
-            segments.append(("\(bucket.remainingPercent)%", color))
+            segments.append(("\(bucket.remainingPercent)%", UsageColor.forRemaining(bucket.remainingPercent)))
             if let resetsAt = bucket.resetsAt {
                 segments.append((" " + UsageDecoder.countdownShort(to: resetsAt), .labelColor))
             }
@@ -82,17 +75,16 @@ final class StatusItemController {
         }
 
         var a11y = "Claude usage. " + a11yParts.joined(separator: ". ")
-        if dimmed {
+        if stale {
             a11y += ". Data is stale, from \(UsageDecoder.countdown(to: Date(), now: snapshot.fetchedAt)) ago"
         }
-        render(titleSegments: segments, dimmed: dimmed, accessibilityLabel: a11y)
+        render(titleSegments: segments, accessibilityLabel: a11y)
     }
 
-    private func render(titleSegments: [(String, NSColor)], dimmed: Bool, accessibilityLabel: String) {
+    private func render(titleSegments: [(String, NSColor)], accessibilityLabel: String) {
         guard let button = statusItem.button else { return }
         button.image = Self.crabImage
-        // The crab is always white — only the percentages carry color. Dim state
-        // is signaled by the text color, not the icon.
+        // The crab is always white; percentages are green (good) or white.
         button.contentTintColor = nil
 
         let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)

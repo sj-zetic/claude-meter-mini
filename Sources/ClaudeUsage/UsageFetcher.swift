@@ -104,9 +104,12 @@ final class UsageFetcher {
     }
 
     private func canAttemptRefresh() -> Bool {
-        if refreshInFlight { return false }
-        if let until = refreshCooldownUntil, Date() < until { return false }
-        return true
+        // Disabled: the token-refresh endpoint hard-rate-limits this credential
+        // (persistent 429), and retrying only makes it worse. Instead the
+        // `relogin` LaunchAgent keeps the Keychain item fresh via `claude auth
+        // login` (which reuses the desktop session and isn't rate-limited), and
+        // the widget is a pure reader — it re-reads the Keychain on 401/expiry.
+        false
     }
 
     private func fetch(isRetryAfterAuthRecovery: Bool = false) {

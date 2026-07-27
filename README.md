@@ -58,13 +58,13 @@ doesn't re-prompt.
   429/errors, honoring `Retry-After`. Last result is cached to
   `~/Library/Application Support/ClaudeUsage/last.json` so a relaunch shows data
   instantly (marked stale until the first live fetch).
-- **Design:** pixel-art crab template icon + monospaced-digit percentages;
-  green ≥40%, amber 15–39%, red <15%. Adapts to light/dark automatically.
-  Stale/error dims the whole item — color is never the only signal.
-- **Colorblind (적녹색약):** safety comes from redundancy, not hue choice — every
-  level carries a distinct SHAPE in the dropdown (checkmark-circle / caution-circle
-  / warning-triangle) and the number is always shown, so the critical state never
-  depends on perceiving red.
+- **Design:** pixel-art crab icon (always white) + monospaced-digit percentages.
+  Two-level, colorblind-simple color: **green** when a limit is healthy (≥40%
+  left), **white** otherwise (neutral-to-poor). No red/amber and never gray — even
+  stale data keeps its green/white value color.
+- **Colorblind (적녹색약):** green vs. white avoids the red/green problem entirely;
+  the dropdown rows also carry a distinct SHAPE (checkmark vs. warning-triangle)
+  and the number is always shown.
 - **Accessibility:** VoiceOver labels on the status item and every row
   ("Weekly limit: 12 percent remaining, resets in 2 hours"). No animation, so
   Reduce Motion is a non-issue.
@@ -98,10 +98,19 @@ rm ~/Library/LaunchAgents/com.seongjun.claudeusage.plist
 
 The menu's **Launch at Login** toggle (via `SMAppService`) manages the same thing.
 
-### Staying signed in
+### Staying signed in (auto-relogin)
 
-The access token lasts ~24h; the widget auto-refreshes it (throttled to avoid the
-token endpoint's rate limit) and writes the rotated token back to the Keychain. If
-the endpoint ever rate-limits a refresh, the widget shows dimmed last-known data and
-**recovers on its own** once the limit clears — no relaunch needed. Only if the
-refresh token itself lapses do you re-run `claude auth login --claudeai`.
+The access token lasts ~24h. The token *refresh* endpoint hard-rate-limits this
+credential (persistent 429), so the widget does **not** refresh — it's a pure
+Keychain reader. Instead a second LaunchAgent (`…relogin`) runs `scripts/relogin.sh`
+**every 12h and at login**, which calls `claude auth login --claudeai`. That
+completes headlessly by reusing the signed-in **Claude desktop** session (no browser,
+no rate limit) and writes a fresh token to the Keychain the widget reads.
+
+Requirement: stay signed into the Claude desktop app. Logs:
+`~/Library/Logs/claudeusage-relogin.log`. To stop it:
+
+```bash
+launchctl bootout gui/$(id -u)/com.seongjun.claudeusage.relogin
+rm ~/Library/LaunchAgents/com.seongjun.claudeusage.relogin.plist
+```
