@@ -82,27 +82,6 @@ enum CredentialStore {
         )
     }
 
-    // Merge a token-refresh response into existing credentials, preserving
-    // fields we don't manage. Refresh tokens ROTATE: the response's new refresh
-    // token replaces the old (now-invalid) one.
-    static func applyingRefresh(to creds: Credentials, result: UsageFetcher.RefreshResult) -> Credentials {
-        var raw = creds.raw
-        raw["accessToken"] = result.accessToken
-        if let newRefresh = result.refreshToken { raw["refreshToken"] = newRefresh }
-        var expiresAt: Date?
-        if let expiresIn = result.expiresIn {
-            expiresAt = Date().addingTimeInterval(expiresIn)
-            raw["expiresAt"] = Int((expiresAt!.timeIntervalSince1970 * 1000).rounded())
-        }
-        return Credentials(
-            accessToken: result.accessToken,
-            refreshToken: (result.refreshToken ?? creds.refreshToken),
-            expiresAt: expiresAt ?? creds.expiresAt,
-            subscriptionType: creds.subscriptionType,
-            raw: raw
-        )
-    }
-
     // Write rotated credentials back to the same keychain item (same schema),
     // so the stored refresh token is never left invalid after a rotation.
     // Uses `security -i` with the command fed over STDIN so the secret never

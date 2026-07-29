@@ -67,49 +67,35 @@ final class UsageFetcher {
         timer = t
     }
 
-    // Keep the token perpetually fresh: re-read the store (Claude Code may have
-    // refreshed it), and if it is near expiry, proactively refresh BEFORE it
-    // dies — instead of reacting to 401s after the fact.
+    // The widget can't refresh the token itself (that endpoint hard-rate-limits
+    // this credential). Instead it re-reads the Keychain, and when the token is
+    // missing / expired / near expiry it KICKS the `relogin` LaunchAgent, which
+    // re-logs-in via the desktop session. The widget only polls while the Mac is
+    // awake — exactly when `auth login` completes quickly — so this is event-
+    // driven off real expiry rather than a blind timer. Kicks are throttled.
     private func ensureFreshToken(_ completion: @escaping (String?) -> Void) {
         if credentials == nil || credentials!.isNearExpiry() {
-            credentials = CredentialStore.discover()
+            credentials = CredentialStore.discover()   // relogin may have just refreshed it
         }
-        guard let creds = credentials else {
-            completion(nil)
-            return
+        if credentials == nil || credentials!.isNearExpiry() {
+            kickReloginIfDue()
         }
-        guard creds.isNearExpiry(), let refreshToken = creds.refreshToken,
-              canAttemptRefresh() else {
-            // Fresh enough, or refresh unavailable/cooling down — use what we have.
-            completion(creds.accessToken)
-            return
-        }
-        refreshInFlight = true
-        refreshAccessToken(refreshToken: refreshToken) { [weak self] result in
-            guard let self else { return }
-            self.refreshInFlight = false
-            if let result {
-                self.refreshCooldownUntil = nil
-                let updated = CredentialStore.applyingRefresh(to: creds, result: result)
-                self.credentials = updated
-                // Persist the rotated pair — a rotation invalidates the OLD
-                // refresh token, so NOT writing back is what kills the app later.
-                CredentialStore.persist(updated)
-                completion(updated.accessToken)
-            } else {
-                // Cooldown set inside refreshAccessToken (honors Retry-After).
-                completion(creds.accessToken)
-            }
-        }
+        completion(credentials?.accessToken)
     }
 
-    private func canAttemptRefresh() -> Bool {
-        // Disabled: the token-refresh endpoint hard-rate-limits this credential
-        // (persistent 429), and retrying only makes it worse. Instead the
-        // `relogin` LaunchAgent keeps the Keychain item fresh via `claude auth
-        // login` (which reuses the desktop session and isn't rate-limited), and
-        // the widget is a pure reader — it re-reads the Keychain on 401/expiry.
-        false
+    // Ask launchd to run the relogin job now. Not -k: if a (slow) login is
+    // already running we let it finish rather than killing it. Fire-and-forget —
+    // the fresh token lands in the Keychain and a later poll picks it up.
+    private var lastReloginKickAt: Date?
+    private func kickReloginIfDue(minimumGap: TimeInterval = 300) {
+        if let last = lastReloginKickAt, Date().timeIntervalSince(last) < minimumGap { return }
+        lastReloginKickAt = Date()
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        task.arguments = ["kickstart", "gui/\(getuid())/com.seongjun.claudeusage.relogin"]
+        task.standardOutput = Pipe()
+        task.standardError = Pipe()
+        try? task.run()
     }
 
     private func fetch(isRetryAfterAuthRecovery: Bool = false) {
@@ -192,77 +178,19 @@ final class UsageFetcher {
         }
     }
 
-    // Primary recovery after a 401: re-read the credential store (Claude Code
-    // refreshes tokens itself and rewrites the keychain). Fallback: refresh the
-    // token ourselves — throttled, so a broken refresh can't spiral.
+    // After a 401 the stored token is stale. Re-read the Keychain (the relogin
+    // agent may have just written a fresh one) and retry once; otherwise kick a
+    // relogin and surface auth-error while the widget keeps showing cached data.
     private func recoverAuthThenRetry() {
         let previousToken = credentials?.accessToken
         credentials = CredentialStore.discover()
         if let creds = credentials, creds.accessToken != previousToken {
-            fetch(isRetryAfterAuthRecovery: true)
+            fetch(isRetryAfterAuthRecovery: true)   // a newer token appeared in the Keychain
             return
         }
-        guard let creds = credentials, let refreshToken = creds.refreshToken,
-              canAttemptRefresh() else {
-            state.phase = .authError
-            backOffAndNotify()
-            return
-        }
-        refreshInFlight = true
-        refreshAccessToken(refreshToken: refreshToken) { [weak self] result in
-            guard let self else { return }
-            self.refreshInFlight = false
-            if let result {
-                self.refreshCooldownUntil = nil
-                let updated = CredentialStore.applyingRefresh(to: creds, result: result)
-                self.credentials = updated
-                CredentialStore.persist(updated)
-                self.fetch(isRetryAfterAuthRecovery: true)
-            } else {
-                self.state.phase = .authError
-                self.backOffAndNotify()
-            }
-        }
-    }
-
-    struct RefreshResult {
-        let accessToken: String
-        let refreshToken: String?
-        let expiresIn: TimeInterval?
-    }
-
-    private func refreshAccessToken(refreshToken: String,
-                                    completion: @escaping (RefreshResult?) -> Void) {
-        var request = URLRequest(url: URL(string: "https://platform.claude.com/v1/oauth/token")!)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "grant_type": "refresh_token",
-            "refresh_token": refreshToken,
-            "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-        ])
-        session.dataTask(with: request) { [weak self] data, response, _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                let http = response as? HTTPURLResponse
-                guard let http, http.statusCode == 200, let data,
-                      let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                      let token = json["access_token"] as? String else {
-                    // Failure cooldown: at least 30 min, or the server's
-                    // Retry-After if longer. Never hammer the token endpoint.
-                    let retryAfter = http?.value(forHTTPHeaderField: "Retry-After")
-                        .flatMap(Double.init) ?? 0
-                    self.refreshCooldownUntil = Date().addingTimeInterval(max(1800, retryAfter))
-                    completion(nil)
-                    return
-                }
-                completion(RefreshResult(
-                    accessToken: token,
-                    refreshToken: json["refresh_token"] as? String,
-                    expiresIn: (json["expires_in"] as? NSNumber)?.doubleValue))
-            }
-        }.resume()
+        kickReloginIfDue()
+        state.phase = .authError
+        backOffAndNotify()
     }
 
     private func nextBackoffInterval() -> TimeInterval {

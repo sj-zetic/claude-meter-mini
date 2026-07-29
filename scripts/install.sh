@@ -52,10 +52,12 @@ PLISTEOF
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 
-# Keep-signed-in: a second LaunchAgent re-logs-in every 12h (and at login) via
+# Keep-signed-in: a second LaunchAgent re-logs-in every 4h (and at login) via
 # the desktop session, so the token endpoint's rate-limited refresh is never
-# used. Requires being signed into the Claude desktop app.
-echo "==> installing relogin LaunchAgent (keeps the token fresh every 12h)"
+# used. The widget ALSO kicks this job the moment it sees the token expiring
+# (see UsageFetcher.kickReloginIfDue), which covers wake-from-sleep. Requires
+# being signed into the Claude desktop app.
+echo "==> installing relogin LaunchAgent (keeps the token fresh, every 4h + on expiry)"
 RELOGIN_PLIST="$HOME/Library/LaunchAgents/$RELOGIN_LABEL.plist"
 mkdir -p "$HOME/Library/Logs"
 cat > "$RELOGIN_PLIST" <<PLISTEOF
@@ -66,7 +68,7 @@ cat > "$RELOGIN_PLIST" <<PLISTEOF
 	<key>Label</key><string>$RELOGIN_LABEL</string>
 	<key>ProgramArguments</key><array><string>/bin/bash</string><string>$REPO/scripts/relogin.sh</string></array>
 	<key>RunAtLoad</key><true/>
-	<key>StartInterval</key><integer>43200</integer>
+	<key>StartInterval</key><integer>14400</integer>
 	<key>LimitLoadToSessionType</key><string>Aqua</string>
 	<key>StandardOutPath</key><string>$HOME/Library/Logs/claudeusage-relogin.out.log</string>
 	<key>StandardErrorPath</key><string>$HOME/Library/Logs/claudeusage-relogin.err.log</string>
@@ -77,5 +79,5 @@ chmod +x "$REPO/scripts/relogin.sh"
 launchctl bootout "gui/$(id -u)/$RELOGIN_LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$RELOGIN_PLIST"
 
-echo "Done. Crab icon starts at login; the token auto-refreshes via re-login every 12h."
+echo "Done. Crab icon starts at login; the token auto-refreshes via re-login (every 4h + on expiry)."
 echo "(On another machine, edit EMAIL in scripts/relogin.sh and sign into the Claude desktop app.)"
