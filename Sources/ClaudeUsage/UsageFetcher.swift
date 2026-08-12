@@ -83,16 +83,18 @@ final class UsageFetcher {
         completion(credentials?.accessToken)
     }
 
-    // Ask launchd to run the relogin job now. Not -k: if a (slow) login is
-    // already running we let it finish rather than killing it. Fire-and-forget —
-    // the fresh token lands in the Keychain and a later poll picks it up.
+    // Ask launchd to run the relogin job now, with -k so a STUCK/hung login is
+    // force-restarted (a wedged relogin job otherwise blocks every future run —
+    // that once froze the widget on stale data for days). The relogin script has
+    // its own 90s timeout, so -k rarely interrupts a healthy login. Fire-and-
+    // forget — the fresh token lands in the Keychain and a later poll picks it up.
     private var lastReloginKickAt: Date?
     private func kickReloginIfDue(minimumGap: TimeInterval = 300) {
         if let last = lastReloginKickAt, Date().timeIntervalSince(last) < minimumGap { return }
         lastReloginKickAt = Date()
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        task.arguments = ["kickstart", "gui/\(getuid())/com.seongjun.claudeusage.relogin"]
+        task.arguments = ["kickstart", "-k", "gui/\(getuid())/com.seongjun.claudeusage.relogin"]
         task.standardOutput = Pipe()
         task.standardError = Pipe()
         try? task.run()
