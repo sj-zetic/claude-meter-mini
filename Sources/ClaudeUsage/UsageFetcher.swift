@@ -27,10 +27,6 @@ final class UsageFetcher {
     private var timer: Timer?
     private var lastFetchAt: Date?
     private var inFlight = false
-    // Refresh attempts are strictly throttled: a failing refresh must never be
-    // retried every poll cycle (that once rate-limited us into a dead spiral).
-    private var refreshCooldownUntil: Date?
-    private var refreshInFlight = false
     private let session = URLSession(configuration: .ephemeral)
     private let userAgent: String
 

@@ -5,11 +5,8 @@ struct Credentials {
     let refreshToken: String?
     let expiresAt: Date?
     let subscriptionType: String?
-    // Full decoded oauth dict, preserved so persist() round-trips unknown fields
-    // (scopes, rateLimitTier, refreshTokenExpiresAt, …) without dropping them.
-    var raw: [String: Any] = [:]
 
-    // 15-minute margin: proactive refresh happens well before real expiry.
+    // 15-minute margin: the widget kicks a relogin before the token actually dies.
     func isNearExpiry(now: Date = Date()) -> Bool {
         guard let expiresAt else { return false }
         return expiresAt.timeIntervalSince(now) < 900
@@ -77,64 +74,8 @@ enum CredentialStore {
             accessToken: accessToken,
             refreshToken: oauth["refreshToken"] as? String,
             expiresAt: expiresAt,
-            subscriptionType: oauth["subscriptionType"] as? String,
-            raw: oauth
+            subscriptionType: oauth["subscriptionType"] as? String
         )
-    }
-
-    // Write rotated credentials back to the same keychain item (same schema),
-    // so the stored refresh token is never left invalid after a rotation.
-    // Uses `security -i` with the command fed over STDIN so the secret never
-    // appears in a process argument list.
-    @discardableResult
-    static func persist(_ creds: Credentials) -> Bool {
-        guard !creds.raw.isEmpty,
-              let blobData = try? JSONSerialization.data(withJSONObject: ["claudeAiOauth": creds.raw]),
-              let blob = String(data: blobData, encoding: .utf8),
-              !blob.contains("'") else {
-            return false
-        }
-        let account = keychainAccount() ?? NSUserName()
-        let command = "add-generic-password -U -s 'Claude Code-credentials' -a '\(account)' -w '\(blob)'\n"
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["-i"]
-        let stdin = Pipe()
-        process.standardInput = stdin
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        do {
-            try process.run()
-        } catch {
-            return false
-        }
-        stdin.fileHandleForWriting.write(command.data(using: .utf8)!)
-        stdin.fileHandleForWriting.closeFile()
-        process.waitUntilExit()
-        return process.terminationStatus == 0
-    }
-
-    // The existing item's account attribute (needed to update the same item).
-    private static func keychainAccount() -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-s", "Claude Code-credentials"]
-        let stdout = Pipe()
-        process.standardOutput = stdout
-        process.standardError = Pipe()
-        do { try process.run() } catch { return nil }
-        let data = stdout.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
-              let output = String(data: data, encoding: .utf8) else { return nil }
-        // Line looks like:     "acct"<blob>="seongjun"
-        for line in output.components(separatedBy: "\n") where line.contains("\"acct\"") {
-            if let range = line.range(of: "=\"") {
-                return String(line[range.upperBound...].dropLast(line.hasSuffix("\"") ? 1 : 0))
-            }
-        }
-        return nil
     }
 
     // Path to the CLI bundled with the Claude desktop app (highest version wins),

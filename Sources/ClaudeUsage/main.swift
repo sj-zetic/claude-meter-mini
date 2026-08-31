@@ -3,25 +3,6 @@ import Foundation
 
 // `ClaudeUsage --dump`: run credential discovery + one fetch, print the parsed
 // snapshot to stdout, exit. For debugging without launching the UI.
-// `ClaudeUsage --verify-persist`: read creds, write them back to the keychain
-// unchanged, re-read, confirm the tokens survived. Verifies the write-back that
-// keeps the token perpetually fresh.
-if CommandLine.arguments.contains("--verify-persist") {
-    guard let creds = CredentialStore.discover() else {
-        print("FAIL: no credentials to test"); exit(1)
-    }
-    print("before: fields \(creds.raw.keys.sorted())")
-    let ok = CredentialStore.persist(creds)
-    print("persist() returned: \(ok)")
-    guard let after = CredentialStore.discover() else {
-        print("FAIL: credentials missing after write-back"); exit(2)
-    }
-    let preserved = after.accessToken == creds.accessToken
-        && after.refreshToken == creds.refreshToken
-    print("re-read: tokens preserved = \(preserved), fields \(after.raw.keys.sorted())")
-    exit(ok && preserved ? 0 : 3)
-}
-
 if CommandLine.arguments.contains("--dump") {
     guard let creds = CredentialStore.discover() else {
         print("credentials: NOT FOUND")
