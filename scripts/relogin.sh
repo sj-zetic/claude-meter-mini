@@ -9,17 +9,23 @@
 set -uo pipefail
 
 export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.nvm/versions/node/*/bin:/usr/bin:/bin"
-EMAIL="you@example.com"
+# Optional: your Claude account email, used only as a login hint to pre-fill the
+# sign-in page. Leave blank — login still works (it reuses the desktop session).
+EMAIL="${CLAUDEUSAGE_EMAIL:-}"
 LOG="$HOME/Library/Logs/claudeusage-relogin.log"
 NPX="$(command -v npx || echo /usr/local/bin/npx)"
 TIMEOUT=90   # seconds; a working login finishes in ~10-20s
+
+# Only pass --email when one is set, so no address is ever hardcoded here.
+LOGIN_ARGS=(-y @anthropic-ai/claude-code auth login --claudeai)
+[ -n "$EMAIL" ] && LOGIN_ARGS+=(--email "$EMAIL")
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] relogin start" >> "$LOG"
 # Run under a HARD TIMEOUT. `auth login` normally completes headlessly (it
 # reuses the desktop session), but if the callback stalls it waits forever at
 # "Paste code here". A hung job blocks every future scheduled run, so we must
 # never let it hang — kill it and let the next run (or the widget's kick) retry.
-"$NPX" -y @anthropic-ai/claude-code auth login --claudeai --email "$EMAIL" < /dev/null >> "$LOG" 2>&1 &
+"$NPX" "${LOGIN_ARGS[@]}" < /dev/null >> "$LOG" 2>&1 &
 LOGIN_PID=$!
 ( sleep "$TIMEOUT"
   if kill -0 "$LOGIN_PID" 2>/dev/null; then

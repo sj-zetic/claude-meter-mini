@@ -80,4 +80,5 @@ launchctl bootout "gui/$(id -u)/$RELOGIN_LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$RELOGIN_PLIST"
 
 echo "Done. Crab icon starts at login; the token auto-refreshes via re-login (every 4h + on expiry)."
-echo "(On another machine, edit EMAIL in scripts/relogin.sh and sign into the Claude desktop app.)"
+echo "(Requires being signed into the Claude desktop app. Optionally set"
+echo " CLAUDEUSAGE_EMAIL in scripts/relogin.sh as a sign-in hint.)"

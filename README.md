@@ -103,12 +103,18 @@ The menu's **Launch at Login** toggle (via `SMAppService`) manages the same thin
 The access token lasts ~24h. The token *refresh* endpoint hard-rate-limits this
 credential (persistent 429), so the widget does **not** refresh — it's a pure
 Keychain reader. Instead a second LaunchAgent (`…relogin`) runs `scripts/relogin.sh`
-**every 12h and at login**, which calls `claude auth login --claudeai`. That
+**every 4h and at login**, which calls `claude auth login --claudeai`. That
 completes headlessly by reusing the signed-in **Claude desktop** session (no browser,
 no rate limit) and writes a fresh token to the Keychain the widget reads.
 
-Requirement: stay signed into the Claude desktop app. Logs:
-`~/Library/Logs/claudeusage-relogin.log`. To stop it:
+Requirement: stay signed into the Claude desktop app.
+
+> **Email hint (optional):** `relogin.sh` no longer hardcodes any email — the
+> `EMAIL` variable is blank by design (no address is committed to this repo). Login
+> works fine without it. If you want the sign-in page pre-filled with your address,
+> set `CLAUDEUSAGE_EMAIL="you@example.com"` at the top of `scripts/relogin.sh`.
+
+Logs: `~/Library/Logs/claudeusage-relogin.log`. To stop it:
 
 ```bash
 launchctl bootout gui/$(id -u)/com.seongjun.claudeusage.relogin
